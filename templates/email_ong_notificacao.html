@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nova doação recebida - Doar +</title>
+    <style>
+        /* Importação das fontes */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Playwrite+US+Trad:wght@100..400&display=swap');
+
+        /* Reset básico para clientes de e-mail */
+        body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+        img { -ms-interpolation-mode: bicubic; }
+        body { margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Inter', Arial, sans-serif; }
+    </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Inter', Arial, sans-serif;">
+
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="table-layout: fixed; background-color: #f4f4f5; padding: 40px 0;">
+        <tr>
+            <td align="center">
+                <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05); max-width: 600px; width: 100%;">
+
+                    <tr>
+                        <td align="center" style="padding: 30px 20px; border-bottom: 3px solid #f7b567;">
+                            <span style="font-family: 'Playwrite US Trad', cursive; font-size: 36px; color: #0c598b; font-weight: 400;">Doar</span>
+                            <span style="font-family: 'Playwrite US Trad', cursive; font-size: 36px; color: #f65682; font-weight: 400;"> +</span>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding: 40px 30px; color: #333333;">
+                            <h2 style="color: #f7b567; font-size: 24px; margin-top: 0; text-align: center; font-weight: 700;">🎉 Nova Doação Recebida!</h2>
+
+                            <p style="font-size: 16px; line-height: 1.6; color: #4a4a4a;">Olá, <strong>{{nome_ong}}</strong>!</p>
+                            <p style="font-size: 16px; line-height: 1.6; color: #4a4a4a;">
+                                Você acaba de receber uma nova doação na plataforma Doar+. Parabéns pelo impacto positivo que você está gerando!
+                            </p>
+
+                            <div style="text-align: center; margin: 35px 0; background-color: #f0f7fb; border-radius: 12px; padding: 25px;">
+                                <span style="font-size: 14px; color: #666; display: block; margin-bottom: 10px;">Valor recebido</span>
+                                <span style="display: inline-block; font-size: 42px; font-weight: 700; color: #4CAF50; background-color: #e8f5e9; padding: 10px 30px; border-radius: 10px;">
+                                    R$ {{valor}}
+                                </span>
+                            </div>
+
+                            <div style="background-color: #f5f7fa; border-radius: 10px; padding: 20px; margin: 20px 0;">
+                                <p style="margin: 0 0 10px 0;"><strong>Doador:</strong> {{nome_doador}}</p>
+                                <p style="margin: 0 0 10px 0;"><strong>Projeto:</strong> {{nome_projeto}}</p>
+                                <p style="margin: 0;"><strong>Data:</strong> {{data_doacao}}</p>
+                            </div>
+
+                            <div style="background-color: #e8f5e9; border-radius: 10px; padding: 15px; text-align: center; margin: 20px 0;">
+                                <span style="font-size: 14px; color: #4CAF50;">Cada doação faz a diferença! Continue com o ótimo trabalho.</span>
+                            </div>
+
+
+
+                            <p style="font-size: 12px; line-height: 1.5; color: #999999; margin-top: 30px; text-align: center; border-top: 1px solid #eee; padding-top: 20px;">
+                                Você está recebendo este e-mail porque uma doação foi feita para sua ONG através da plataforma Doar+.
+                            </p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="height: 4px; background: linear-gradient(90deg, #0c598b 25%, #167cbf 25% 50%, #f7b567 50% 75%, #f65682 75%);"></td>
+                    </tr>
+
+                    <tr>
+                        <td style="background-color: #4b4d4c; padding: 40px 30px;">
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                <tr>
+                                    <td width="60%" valign="top" style="padding-right: 20px;">
+                                        <h3 style="color: #ffffff; font-size: 18px; margin-top: 0; margin-bottom: 15px;">Sobre a Doar <span style="color: #f65682;">+</span></h3>
+                                        <p style="color: #cccccc; font-size: 13px; line-height: 1.6; margin-top: 0;">
+                                            A Doar+ é um portal solidário que conecta pessoas, campanhas e instituições em todo o Brasil, facilitando doações seguras e transparentes.
+                                        </p>
+                                    </td>
+
+                                    <td width="40%" valign="top" align="right">
+                                        <a href="https://doar.ong" style="display: inline-block; background-color: #f65682; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 25px; font-weight: 600; font-size: 14px; margin-top: 10px;">
+                                            Doar agora
+                                        </a>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                <tr>
+                                    <td style="padding-top: 30px; border-top: 1px solid #666666; margin-top: 30px; text-align: left;">
+                                        <p style="color: #999999; font-size: 11px; margin: 0;">
+                                            &copy; 2026 Todos os direitos a Campanha Doar + . Todos os direitos reservados.
+                                        </p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                </table>
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>
