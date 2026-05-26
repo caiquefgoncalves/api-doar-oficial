@@ -1238,3 +1238,6 @@ def redefinir():
         cur.close()
         con.close()
 
+
+
+

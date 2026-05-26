@@ -716,3 +716,4 @@ def ongs_recomendacoes():
     finally:
         cur.close()
         con.close()
+

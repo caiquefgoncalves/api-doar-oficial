@@ -414,6 +414,10 @@ def doar_projeto(id_projeto):
         if not ong:
             return jsonify({"error": "ONG não encontrada"}), 404
 
+        chave_pix = ong[3]
+        if not chave_pix or chave_pix.strip() == '':
+            return jsonify({'error': 'Esta ONG não possui chave PIX cadastrada para receber doações'}), 400
+
         nome_ong = ong[1]
         cidade_ong = ong[2] if ong[2] else ''
         chave_pix = ong[3]

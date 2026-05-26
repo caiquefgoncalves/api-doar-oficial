@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 from datetime import datetime
 
+
 app = Flask(__name__)
 
 
@@ -68,6 +69,7 @@ from ongs import *
 from atualizacao import *
 from comentarios import *
 from graficos_relatorio import *
+from dm import *
 
 
 if __name__ == '__main__':
