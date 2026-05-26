@@ -368,8 +368,14 @@ def footer(pdf):
     rosa = (246, 86, 130)
     laranja = (247, 181, 103)
 
-    pdf.set_y(-25)
+    # Número da página
+    pdf.set_y(-15)
+    pdf.set_font("Arial", "I", 8)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 10, f"Página {pdf.page_no()}", align="C")
 
+    # Linha decorativa
+    pdf.set_y(-18)
     largura = 190 / 4
     cores = [azul, azul_claro, laranja, rosa]
     x = 10

@@ -3,10 +3,10 @@ from flask import jsonify, request, Response, send_file
 from main import app
 from db import conexao
 from funcao import decodificar_token, formatar_cpf, footer, header, resumo_3_colunas, ranking_lista, formatar_cnpj
-import pygal
-from pygal.style import Style
+
 from fpdf import FPDF
 import os
+
 
 
 
@@ -56,7 +56,7 @@ def minhas_doacoes():
                     data_str = str(d[1])
             atividades.append({
                 'tipo': 'Monetário',
-                'valor': f'R$ {d[0]:.2f}'.replace('.', ','),
+                'valor': f'R$ {float(d[0]):.2f}'.replace('.', ','),
                 'projeto': d[2],
                 'ong': d[3],
                 'ong_foto': f'{d[4]}.jpeg',
@@ -98,24 +98,25 @@ def frequencia_doacoes():
     cur = con.cursor()
 
     try:
+        # Buscar todas as doações e processar os meses em Python
         cur.execute("""
-            SELECT 
-                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
-                COUNT(*) as QTD
-            FROM DOACOES d
-            WHERE d.ID_USUARIOS = ? 
-            AND EXTRACT(YEAR FROM d.DATA_DOACAO) = 2026
-            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
-            ORDER BY MES
+            SELECT DATA_DOACAO
+            FROM DOACOES
+            WHERE ID_USUARIOS = ?
+            ORDER BY DATA_DOACAO
         """, (id_doador,))
-        doacoes_mes = cur.fetchall()
+        doacoes = cur.fetchall()
 
         meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
         dados_meses = {mes: 0 for mes in meses}
 
-        for d in doacoes_mes:
-            if d[0] and 1 <= int(d[0]) <= 12:
-                dados_meses[meses[int(d[0]) - 1]] = int(d[1])
+        for doacao in doacoes:
+            if doacao[0]:
+                try:
+                    mes = doacao[0].month
+                    dados_meses[meses[mes - 1]] += 1
+                except:
+                    pass
 
         dados = [{'mes': mes, 'qtd': qtd} for mes, qtd in dados_meses.items()]
 
@@ -144,26 +145,28 @@ def arrecadacao_mensal_ong():
     cur = con.cursor()
 
     try:
-        # arrecadacao_mensal_ong (ONG)
+        # Buscar todas as doações da ONG e processar em Python
         cur.execute("""
-            SELECT 
-                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
-                SUM(d.VALOR) as TOTAL
+            SELECT d.VALOR, d.DATA_DOACAO
             FROM DOACOES d
             INNER JOIN PROJETOS p ON d.ID_PROJETOS = p.ID_PROJETOS
             WHERE p.ID_USUARIOS = ?
-            AND EXTRACT(YEAR FROM d.DATA_DOACAO) = 2026
-            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
-            ORDER BY MES
+            ORDER BY d.DATA_DOACAO
         """, (id_ong,))
-        doacoes_mes = cur.fetchall()
+        doacoes = cur.fetchall()
 
         meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
         dados_meses = {mes: 0 for mes in meses}
 
-        for d in doacoes_mes:
-            if d[0] and 1 <= int(d[0]) <= 12:
-                dados_meses[meses[int(d[0]) - 1]] = float(d[1])
+        for doacao in doacoes:
+            valor = doacao[0] if doacao[0] else 0
+            data = doacao[1]
+            if data:
+                try:
+                    mes = data.month
+                    dados_meses[meses[mes - 1]] += float(valor)
+                except:
+                    pass
 
         dados = [{'mes': mes, 'valor': valor} for mes, valor in dados_meses.items()]
 
@@ -190,23 +193,26 @@ def arrecadacao_global():
     cur = con.cursor()
 
     try:
+        # Buscar todas as doações e processar em Python
         cur.execute("""
-            SELECT 
-                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
-                SUM(d.VALOR) as TOTAL
-            FROM DOACOES d
-            WHERE EXTRACT(YEAR FROM d.DATA_DOACAO) = 2026
-            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
-            ORDER BY MES
+            SELECT VALOR, DATA_DOACAO
+            FROM DOACOES
+            ORDER BY DATA_DOACAO
         """)
-        doacoes_mes = cur.fetchall()
+        doacoes = cur.fetchall()
 
         meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
         dados_meses = {mes: 0 for mes in meses}
 
-        for d in doacoes_mes:
-            if d[0] and 1 <= int(d[0]) <= 12:
-                dados_meses[meses[int(d[0]) - 1]] = float(d[1])
+        for doacao in doacoes:
+            valor = doacao[0] if doacao[0] else 0
+            data = doacao[1]
+            if data:
+                try:
+                    mes = data.month
+                    dados_meses[meses[mes - 1]] += float(valor)
+                except:
+                    pass
 
         dados = [{'mes': mes, 'valor': valor} for mes, valor in dados_meses.items()]
 
@@ -670,4 +676,270 @@ def relatorio_doacoes_periodo():
         cur.close()
         con.close()
 
+
+# ============================================
+# RELATÓRIO PARA O DOADOR
+# ============================================
+@app.route('/doador/meu_relatorio', methods=['GET'])
+def doador_meu_relatorio():
+    """Gera relatório PDF das doações do doador logado"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 1:
+        return jsonify({'error': 'Apenas doadores podem acessar'}), 403
+
+    id_doador = token_data['id_usuarios']
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        # Buscar dados do doador
+        cur.execute("SELECT NOME, EMAIL, CPF_CNPJ FROM USUARIOS WHERE ID_USUARIOS = ?", (id_doador,))
+        doador = cur.fetchone()
+        nome_doador = doador[0] if doador else "Doador"
+        email_doador = doador[1] if doador else ""
+        cpf_doador = doador[2] if doador else ""
+
+        # Buscar doações do doador
+        cur.execute("""
+            SELECT 
+                d.ID_DOACOES,
+                u_ong.NOME as ONG_NOME,
+                p.TITULO as PROJETO,
+                d.VALOR,
+                d.DATA_DOACAO
+            FROM DOACOES d
+            INNER JOIN PROJETOS p ON d.ID_PROJETOS = p.ID_PROJETOS
+            INNER JOIN USUARIOS u_ong ON p.ID_USUARIOS = u_ong.ID_USUARIOS
+            WHERE d.ID_USUARIOS = ?
+            ORDER BY d.DATA_DOACAO DESC
+        """, (id_doador,))
+        doacoes = cur.fetchall()
+
+        # Estatísticas
+        total_doacoes = len(doacoes)
+        total_valor = sum(d[3] for d in doacoes) if doacoes else 0
+
+        # Agrupar por ONG
+        ongs_dict = {}
+        for d in doacoes:
+            ong_nome = d[1]
+            if ong_nome not in ongs_dict:
+                ongs_dict[ong_nome] = {'quantidade': 0, 'valor': 0}
+            ongs_dict[ong_nome]['quantidade'] += 1
+            ongs_dict[ong_nome]['valor'] += d[3]
+
+        top_ongs = sorted(ongs_dict.items(), key=lambda x: x[1]['valor'], reverse=True)[:5]
+
+        pdf = FPDF()
+        pdf.add_page()
+
+        # Adicionar logo
+        logo_path = os.path.join(app.config['UPLOAD_FOLDER'], 'Empresas', 'logo_1.jpeg')
+        if os.path.exists(logo_path):
+            pdf.image(logo_path, x=10, y=8, w=30)
+
+        header(pdf, "Minhas Doações")
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "RESUMO", ln=True)
+        pdf.ln(5)
+
+        resumo_3_colunas(pdf, [
+            ("Total de doações", total_doacoes),
+            ("Valor total doado", f"R$ {total_valor:,.2f}".replace(",", ".").replace(".", ",", 1)),
+            ("Média por doação", f"R$ {total_valor / total_doacoes:,.2f}".replace(",", ".").replace(".", ",",
+                                                                                                    1) if total_doacoes > 0 else "R$ 0,00")
+        ])
+
+        if top_ongs:
+            ranking_lista(pdf, "ONGS QUE MAIS RECEBERAM", [(nome, dados['valor']) for nome, dados in top_ongs],
+                          tipo="moeda")
+
+        azul = (12, 89, 139)
+        cinza = (120, 120, 120)
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "MINHAS DOAÇÕES", ln=True)
+        pdf.ln(3)
+
+        for doacao in doacoes:
+            id_doacao, ong_nome, projeto, valor, data_doacao = doacao
+
+            data_str = data_doacao.strftime('%d/%m/%Y') if hasattr(data_doacao, 'strftime') else str(data_doacao)
+
+            pdf.set_font("Arial", "B", 11)
+            pdf.set_text_color(*azul)
+            pdf.cell(0, 6, f"Doação para {ong_nome}", ln=True)
+
+            pdf.set_font("Arial", "", 10)
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(0, 5, f"Data: {data_str}", ln=True)
+            pdf.cell(0, 5, f"Projeto: {projeto}", ln=True)
+            pdf.cell(0, 5, f"Valor: R$ {float(valor):,.2f}".replace(",", ".").replace(".", ",", 1), ln=True)
+
+            pdf.ln(5)
+            pdf.set_draw_color(*cinza)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(5)
+
+        footer(pdf)
+
+        pdf_path = f"relatorio_doador_{id_doador}.pdf"
+        caminho = os.path.join(app.config['UPLOAD_FOLDER'], 'Relatorios')
+        os.makedirs(caminho, exist_ok=True)
+        caminho_pdf = os.path.join(caminho, pdf_path)
+        pdf.output(caminho_pdf)
+
+        return send_file(caminho_pdf, as_attachment=True)
+
+    except Exception as e:
+        print(f"ERRO doador_meu_relatorio: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+# ============================================
+# RELATÓRIO PARA A ONG
+# ============================================
+@app.route('/ong/meu_relatorio', methods=['GET'])
+def ong_meu_relatorio():
+    """Gera relatório PDF das doações recebidas pela ONG logada"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 2:
+        return jsonify({'error': 'Apenas ONGs podem acessar'}), 403
+
+    id_ong = token_data['id_usuarios']
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        # Buscar dados da ONG
+        cur.execute("SELECT NOME, EMAIL, CPF_CNPJ FROM USUARIOS WHERE ID_USUARIOS = ?", (id_ong,))
+        ong = cur.fetchone()
+        nome_ong = ong[0] if ong else "ONG"
+        email_ong = ong[1] if ong else ""
+        cnpj_ong = ong[2] if ong else ""
+
+        # Buscar doações recebidas pela ONG
+        cur.execute("""
+            SELECT 
+                d.ID_DOACOES,
+                u_doador.NOME as DOADOR_NOME,
+                p.TITULO as PROJETO,
+                d.VALOR,
+                d.DATA_DOACAO
+            FROM DOACOES d
+            INNER JOIN PROJETOS p ON d.ID_PROJETOS = p.ID_PROJETOS
+            INNER JOIN USUARIOS u_doador ON d.ID_USUARIOS = u_doador.ID_USUARIOS
+            WHERE p.ID_USUARIOS = ?
+            ORDER BY d.DATA_DOACAO DESC
+        """, (id_ong,))
+        doacoes = cur.fetchall()
+
+        # Estatísticas
+        total_doacoes = len(doacoes)
+        total_valor = sum(d[3] for d in doacoes) if doacoes else 0
+
+        # Agrupar por doador
+        doadores_dict = {}
+        for d in doacoes:
+            doador_nome = d[1]
+            if doador_nome not in doadores_dict:
+                doadores_dict[doador_nome] = {'quantidade': 0, 'valor': 0}
+            doadores_dict[doador_nome]['quantidade'] += 1
+            doadores_dict[doador_nome]['valor'] += d[3]
+
+        top_doadores = sorted(doadores_dict.items(), key=lambda x: x[1]['valor'], reverse=True)[:5]
+
+        # Agrupar por projeto
+        projetos_dict = {}
+        for d in doacoes:
+            projeto_nome = d[2]
+            if projeto_nome not in projetos_dict:
+                projetos_dict[projeto_nome] = {'quantidade': 0, 'valor': 0}
+            projetos_dict[projeto_nome]['quantidade'] += 1
+            projetos_dict[projeto_nome]['valor'] += d[3]
+
+        top_projetos = sorted(projetos_dict.items(), key=lambda x: x[1]['valor'], reverse=True)[:5]
+
+        pdf = FPDF()
+        pdf.add_page()
+
+        # Adicionar logo
+        logo_path = os.path.join(app.config['UPLOAD_FOLDER'], 'Empresas', 'logo_1.jpeg')
+        if os.path.exists(logo_path):
+            pdf.image(logo_path, x=10, y=8, w=30)
+
+        header(pdf, "Minhas Doações Recebidas")
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "RESUMO", ln=True)
+        pdf.ln(5)
+
+        resumo_3_colunas(pdf, [
+            ("Total de doações", total_doacoes),
+            ("Valor total recebido", f"R$ {total_valor:,.2f}".replace(",", ".").replace(".", ",", 1)),
+            ("Média por doação", f"R$ {total_valor / total_doacoes:,.2f}".replace(",", ".").replace(".", ",",
+                                                                                                    1) if total_doacoes > 0 else "R$ 0,00")
+        ])
+
+        if top_doadores:
+            ranking_lista(pdf, "MAIORES DOADORES", [(nome, dados['valor']) for nome, dados in top_doadores],
+                          tipo="moeda")
+
+        if top_projetos:
+            ranking_lista(pdf, "PROJETOS MAIS DOADOS", [(nome, dados['valor']) for nome, dados in top_projetos],
+                          tipo="moeda")
+
+        azul = (12, 89, 139)
+        cinza = (120, 120, 120)
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "LISTA DE DOAÇÕES RECEBIDAS", ln=True)
+        pdf.ln(3)
+
+        for doacao in doacoes:
+            id_doacao, doador_nome, projeto, valor, data_doacao = doacao
+
+            data_str = data_doacao.strftime('%d/%m/%Y') if hasattr(data_doacao, 'strftime') else str(data_doacao)
+
+            pdf.set_font("Arial", "B", 11)
+            pdf.set_text_color(*azul)
+            pdf.cell(0, 6, f"Doação de {doador_nome}", ln=True)
+
+            pdf.set_font("Arial", "", 10)
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(0, 5, f"Data: {data_str}", ln=True)
+            pdf.cell(0, 5, f"Projeto: {projeto}", ln=True)
+            pdf.cell(0, 5, f"Valor: R$ {float(valor):,.2f}".replace(",", ".").replace(".", ",", 1), ln=True)
+
+            pdf.ln(5)
+            pdf.set_draw_color(*cinza)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(5)
+
+        footer(pdf)
+
+        pdf_path = f"relatorio_ong_{id_ong}.pdf"
+        caminho = os.path.join(app.config['UPLOAD_FOLDER'], 'Relatorios')
+        os.makedirs(caminho, exist_ok=True)
+        caminho_pdf = os.path.join(caminho, pdf_path)
+        pdf.output(caminho_pdf)
+
+        return send_file(caminho_pdf, as_attachment=True)
+
+    except Exception as e:
+        print(f"ERRO ong_meu_relatorio: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
 
