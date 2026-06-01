@@ -1241,3 +1241,215 @@ def redefinir():
 
 
 
+@app.route('/criar_story', methods=['POST'])
+def criar_story():
+    token_data = decodificar_token()
+
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+
+    if token_data['tipo'] != 2:
+        return jsonify({'error': 'Apenas ONGs podem criar stories'}), 403
+
+    texto = request.form.get('texto', '')
+    arquivos = request.files.getlist('arquivos')
+
+    if len(arquivos) == 0:
+        return jsonify({'error': 'Nenhum arquivo enviado'}), 400
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+
+        cur.execute("""
+            INSERT INTO STORIES (ID_USUARIOS, TEXTO, DATA_CRIACAO, VISIVEL)
+            VALUES (?, ?, ?, ?) RETURNING ID_STORIES
+        """, (token_data['id_usuarios'], texto, datetime.now(), 1))
+
+        id_story = cur.fetchone()[0]
+
+
+        for arquivo in arquivos:
+            extensao = arquivo.filename.split('.')[-1]
+            nome = f'{id_story}_{random.randint(1, 99999)}.{extensao}'
+
+            pasta = os.path.join(app.config['UPLOAD_FOLDER'], 'Stories')
+            os.makedirs(pasta, exist_ok=True)
+
+            caminho = os.path.join(pasta, nome)
+            arquivo.save(caminho)
+
+            # Inserir arquivo (sem ID próprio)
+            cur.execute("""
+                INSERT INTO STORIES_ARQUIVOS (ID_STORIES, ARQUIVO)
+                VALUES (?, ?)
+            """, (id_story, nome))
+
+        con.commit()
+
+        return jsonify({'message': 'Story criado com sucesso'}), 201
+
+    except Exception as e:
+        con.rollback()
+        print(f"ERRO criar_story: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+
+@app.route('/feed_stories', methods=['GET'])
+def feed_stories():
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        cur.execute("""
+            SELECT
+                s.ID_STORIES,
+                s.TEXTO,
+                s.DATA_CRIACAO,
+                u.ID_USUARIOS,
+                u.NOME,
+                sa.ARQUIVO
+            FROM STORIES s
+            INNER JOIN USUARIOS u ON u.ID_USUARIOS = s.ID_USUARIOS
+            INNER JOIN STORIES_ARQUIVOS sa ON sa.ID_STORIES = s.ID_STORIES
+            WHERE s.DATA_CRIACAO >= DATEADD(-1 DAY TO CURRENT_TIMESTAMP)
+                AND s.VISIVEL = 1
+                AND u.APROVACAO = 1
+                AND u.ATIVO = 1
+            ORDER BY s.DATA_CRIACAO DESC
+        """)
+
+        dados = cur.fetchall()
+
+        stories = {}
+
+        for s in dados:
+            id_story = s[0]
+            texto = s[1]
+            ong_id = s[3]
+            ong_nome = s[4]
+            arquivo = s[5]
+
+            if ong_id not in stories:
+                stories[ong_id] = {
+                    'ong_id': ong_id,
+                    'ong_nome': ong_nome,
+                    'ong_foto': f'{ong_id}.jpeg',
+                    'stories': []
+                }
+
+            stories[ong_id]['stories'].append({
+                'id': id_story,
+                'texto': texto,
+                'arquivo': arquivo,
+                'url': f"/uploads/Stories/{arquivo}"
+            })
+
+        return jsonify({'stories': list(stories.values())}), 200
+
+    except Exception as e:
+        print(f"ERRO feed_stories: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+
+@app.route('/listar_stories', methods=['GET'])
+def listar_stories():
+    token_data = decodificar_token()
+
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        cur.execute("""
+            SELECT
+                s.ID_STORIES,
+                sa.ARQUIVO,
+                s.DATA_CRIACAO,
+                s.TEXTO
+            FROM STORIES s
+            INNER JOIN STORIES_ARQUIVOS sa ON sa.ID_STORIES = s.ID_STORIES
+            WHERE s.ID_USUARIOS = ?
+            ORDER BY s.DATA_CRIACAO DESC
+        """, (token_data['id_usuarios'],))
+
+        stories = []
+        for item in cur.fetchall():
+            stories.append({
+                'id': item[0],
+                'foto': item[1],
+                'data': item[2].strftime('%d/%m/%Y %H:%M') if item[2] else '',
+                'texto': item[3]
+            })
+
+        return jsonify({'stories': stories}), 200
+
+    except Exception as e:
+        print(f"ERRO listar_stories: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+
+@app.route('/deletar_story/<int:id_story>', methods=['DELETE'])
+def deletar_story(id_story):
+    token_data = decodificar_token()
+
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+
+        cur.execute("""
+            SELECT ID_USUARIOS FROM STORIES WHERE ID_STORIES = ?
+        """, (id_story,))
+        story = cur.fetchone()
+
+        if not story:
+            return jsonify({'error': 'Story não encontrado'}), 404
+
+        if story[0] != token_data['id_usuarios'] and token_data['tipo'] != 0:
+            return jsonify({'error': 'Sem permissão'}), 403
+
+
+        cur.execute("SELECT ARQUIVO FROM STORIES_ARQUIVOS WHERE ID_STORIES = ?", (id_story,))
+        arquivos = cur.fetchall()
+
+
+        pasta = os.path.join(app.config['UPLOAD_FOLDER'], 'Stories')
+        for arquivo in arquivos:
+            caminho = os.path.join(pasta, arquivo[0])
+            if os.path.exists(caminho):
+                os.remove(caminho)
+
+
+        cur.execute("DELETE FROM STORIES_ARQUIVOS WHERE ID_STORIES = ?", (id_story,))
+        cur.execute("DELETE FROM STORIES WHERE ID_STORIES = ?", (id_story,))
+        con.commit()
+
+        return jsonify({'message': 'Story deletado com sucesso'}), 200
+
+    except Exception as e:
+        con.rollback()
+        print(f"ERRO deletar_story: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
