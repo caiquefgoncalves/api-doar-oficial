@@ -1,4 +1,4 @@
-# dm.py - Versão para Firebird com IDENTITY
+# dm.py - Versão simplificada com status online/offline
 from flask import jsonify, request
 from main import app, socketio
 from db import conexao
@@ -6,11 +6,8 @@ from funcao import decodificar_token
 from datetime import datetime
 from flask_socketio import emit, join_room, leave_room
 
-# Dicionário para armazenar conexões dos usuários (id_usuario -> sid)
-conexoes_usuarios = {}
-
-# Dicionário para armazenar status online dos usuários
-usuarios_online = {}  # {usuario_id: {'status': True, 'ultima_atividade': timestamp, 'nome': nome_usuario, 'tipo': tipo}}
+# Dicionário para armazenar usuários online
+usuarios_online = set()  # Apenas IDs dos usuários online
 
 
 @app.route('/dm/iniciar_conversa/<int:id_ong>', methods=['POST'])
@@ -51,7 +48,7 @@ def iniciar_conversa(id_ong):
                 'conversa_id': conversa[0]
             }), 200
 
-        # Criar nova conversa - com RETURNING para pegar o ID gerado
+        # Criar nova conversa
         cur.execute("""
             INSERT INTO CONVERSAS (ID_DOADOR, ID_ONG, ULTIMA_MENSAGEM) 
             VALUES (?, ?, ?) RETURNING ID_CONVERSA
@@ -107,7 +104,7 @@ def enviar_mensagem(id_conversa):
         if id_remetente != id_doador and id_remetente != id_ong:
             return jsonify({'error': 'Você não participa desta conversa'}), 403
 
-        # Salvar mensagem com RETURNING
+        # Salvar mensagem
         cur.execute("""
             INSERT INTO MENSAGENS (ID_CONVERSA, ID_REMETENTE, MENSAGEM, DATA_ENVIO) 
             VALUES (?, ?, ?, ?) RETURNING ID_MENSAGEM
@@ -213,9 +210,9 @@ def listar_conversas():
             """, (conv[0],))
             ultima_msg = cur.fetchone()
 
-            # Verificar se o usuário está online
+            # VERIFICAR SE O CONTATO ESTÁ ONLINE
             usuario_contato = conv[1]
-            esta_online = usuario_contato in usuarios_online and usuarios_online[usuario_contato]['status']
+            esta_online = usuario_contato in usuarios_online
 
             lista_conversas.append({
                 'conversa_id': conv[0],
@@ -342,7 +339,7 @@ def listar_ongs_ativas():
         con.close()
 
 
-# ==================== SOCKET.IO EVENTOS ====================
+# ==================== SOCKET.IO EVENTOS SIMPLIFICADOS ====================
 
 @socketio.on('connect')
 def handle_connect():
@@ -351,7 +348,7 @@ def handle_connect():
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    # Remover usuário do dicionário de conexões
+    # Remover usuário do set de online
     usuario_id = None
     for uid, sid in conexoes_usuarios.items():
         if sid == request.sid:
@@ -360,24 +357,17 @@ def handle_disconnect():
 
     if usuario_id:
         del conexoes_usuarios[usuario_id]
-        # Atualizar status para offline
-        if usuario_id in usuarios_online:
-            usuarios_online[usuario_id]['status'] = False
-            usuarios_online[usuario_id]['ultima_atividade'] = datetime.now()
-            # Notificar todos os usuários que esse usuário ficou offline
-            socketio.emit('user_status', {
-                'usuario_id': usuario_id,
-                'status': False,
-                'ultima_atividade': usuarios_online[usuario_id]['ultima_atividade'].strftime('%d/%m/%Y %H:%M')
-            })
-        print(f'Usuário {usuario_id} desconectado')
-
-    print(f'Cliente desconectado: {request.sid}')
+        usuarios_online.discard(usuario_id)
+        # Notificar que usuário ficou offline
+        socketio.emit('user_status', {
+            'usuario_id': usuario_id,
+            'status': False
+        })
+        print(f'Usuário {usuario_id} desconectado (offline)')
 
 
 @socketio.on('authenticate')
 def handle_authenticate(data):
-    """Autenticar usuário e entrar nas salas das suas conversas"""
     token = data.get('token')
     if not token:
         emit('error', {'error': 'Token não fornecido'})
@@ -389,85 +379,52 @@ def handle_authenticate(data):
         return
 
     usuario_id = token_data['id_usuarios']
-    tipo_usuario = token_data['tipo']
     conexoes_usuarios[usuario_id] = request.sid
 
-    # Buscar nome do usuário
-    con = conexao()
-    cur = con.cursor()
-    nome_usuario = ''
-    try:
-        cur.execute("SELECT NOME FROM USUARIOS WHERE ID_USUARIOS = ?", (usuario_id,))
-        result = cur.fetchone()
-        if result:
-            nome_usuario = result[0]
-    except Exception as e:
-        print(f'Erro ao buscar nome: {e}')
-    finally:
-        cur.close()
-        con.close()
+    # Adicionar aos usuários online
+    usuarios_online.add(usuario_id)
 
-    # Atualizar status para online
-    usuarios_online[usuario_id] = {
-        'status': True,
-        'ultima_atividade': datetime.now(),
-        'nome': nome_usuario,
-        'tipo': tipo_usuario
-    }
+    print(f'✅ Usuário {usuario_id} está ONLINE')
 
-    # Notificar todos os usuários que esse usuário ficou online
+    # Notificar todos que este usuário ficou online
     socketio.emit('user_status', {
         'usuario_id': usuario_id,
-        'status': True,
-        'nome': nome_usuario,
-        'tipo': tipo_usuario
+        'status': True
     })
 
-    # Entrar nas salas de todas as conversas do usuário
+    # Entrar nas salas das conversas
     con = conexao()
     cur = con.cursor()
 
     try:
-        if tipo_usuario == 1:  # Doador
+        tipo = token_data['tipo']
+        if tipo == 1:
             cur.execute("SELECT ID_CONVERSA FROM CONVERSAS WHERE ID_DOADOR = ?", (usuario_id,))
-        else:  # ONG
+        else:
             cur.execute("SELECT ID_CONVERSA FROM CONVERSAS WHERE ID_ONG = ?", (usuario_id,))
 
         conversas = cur.fetchall()
         for conv in conversas:
             sala = f"conversa_{conv[0]}"
             join_room(sala)
-            print(f'Usuário {usuario_id} entrou na sala {sala}')
     except Exception as e:
-        print(f'Erro ao autenticar: {e}')
+        print(f'Erro ao entrar nas salas: {e}')
     finally:
         cur.close()
         con.close()
 
-    # Enviar status de todos os usuários online para o cliente
-    usuarios_online_list = []
-    for uid, info in usuarios_online.items():
-        if info['status']:
-            usuarios_online_list.append({
-                'usuario_id': uid,
-                'nome': info['nome'],
-                'tipo': info['tipo']
-            })
-
-    emit('online_users', {'usuarios': usuarios_online_list})
     emit('authenticated', {'status': 'ok', 'usuario_id': usuario_id})
 
 
 @socketio.on('join_conversa')
 def handle_join_conversa(data):
-    """Entrar em uma sala de conversa específica"""
     conversa_id = data.get('conversa_id')
     if conversa_id:
         sala = f"conversa_{conversa_id}"
         join_room(sala)
-        print(f'Cliente {request.sid} entrou na sala {sala}')
+        print(f'Cliente entrou na sala {sala}')
 
-        # Enviar status do outro participante da conversa
+        # Enviar status do outro participante
         con = conexao()
         cur = con.cursor()
         try:
@@ -476,73 +433,31 @@ def handle_join_conversa(data):
             if conversa:
                 id_doador = conversa[0]
                 id_ong = conversa[1]
-                # Descobrir quem é o outro participante
+
+                # Descobrir o outro participante
                 sid_atual = request.sid
                 usuario_atual = None
                 for uid, sid in conexoes_usuarios.items():
                     if sid == sid_atual:
                         usuario_atual = uid
                         break
+
                 if usuario_atual:
                     outro_id = id_ong if usuario_atual == id_doador else id_doador
-                    if outro_id in usuarios_online:
-                        emit('participant_status', {
-                            'usuario_id': outro_id,
-                            'status': usuarios_online[outro_id]['status'],
-                            'ultima_atividade': usuarios_online[outro_id]['ultima_atividade'].strftime(
-                                '%d/%m/%Y %H:%M') if usuarios_online[outro_id]['ultima_atividade'] else None,
-                            'nome': usuarios_online[outro_id]['nome']
-                        })
-                    else:
-                        emit('participant_status', {
-                            'usuario_id': outro_id,
-                            'status': False,
-                            'ultima_atividade': None,
-                            'nome': None
-                        })
+                    esta_online = outro_id in usuarios_online
+                    emit('participant_status', {
+                        'usuario_id': outro_id,
+                        'status': esta_online
+                    })
         except Exception as e:
-            print(f'Erro ao buscar participante: {e}')
+            print(f'Erro: {e}')
         finally:
             cur.close()
             con.close()
 
-        emit('joined_conversa', {'conversa_id': conversa_id})
-
-
-@socketio.on('leave_conversa')
-def handle_leave_conversa(data):
-    """Sair de uma sala de conversa específica"""
-    conversa_id = data.get('conversa_id')
-    if conversa_id:
-        sala = f"conversa_{conversa_id}"
-        leave_room(sala)
-        print(f'Cliente {request.sid} saiu da sala {sala}')
-
-
-@socketio.on('get_user_status')
-def handle_get_user_status(data):
-    """Obter status de um usuário específico"""
-    usuario_id = data.get('usuario_id')
-    if usuario_id and usuario_id in usuarios_online:
-        emit('user_status_response', {
-            'usuario_id': usuario_id,
-            'status': usuarios_online[usuario_id]['status'],
-            'ultima_atividade': usuarios_online[usuario_id]['ultima_atividade'].strftime('%d/%m/%Y %H:%M') if
-            usuarios_online[usuario_id]['ultima_atividade'] else None,
-            'nome': usuarios_online[usuario_id]['nome']
-        })
-    elif usuario_id:
-        emit('user_status_response', {
-            'usuario_id': usuario_id,
-            'status': False,
-            'ultima_atividade': None,
-            'nome': None
-        })
-
 
 @socketio.on('send_message')
 def handle_send_message(data):
-    """Enviar mensagem via Socket.IO"""
     token = data.get('token')
     if not token:
         emit('error', {'error': 'Token não fornecido'})
@@ -575,14 +490,7 @@ def handle_send_message(data):
             emit('error', {'error': 'Conversa não encontrada'})
             return
 
-        id_doador = conversa[0]
-        id_ong = conversa[1]
-
-        if id_remetente != id_doador and id_remetente != id_ong:
-            emit('error', {'error': 'Você não participa desta conversa'})
-            return
-
-        # Salvar mensagem no banco com RETURNING
+        # Salvar mensagem
         cur.execute("""
             INSERT INTO MENSAGENS (ID_CONVERSA, ID_REMETENTE, MENSAGEM, DATA_ENVIO) 
             VALUES (?, ?, ?, ?) RETURNING ID_MENSAGEM
@@ -590,27 +498,16 @@ def handle_send_message(data):
 
         novo_id = cur.fetchone()[0]
 
-        # Atualizar última mensagem
-        cur.execute("""
-            UPDATE CONVERSAS SET ULTIMA_MENSAGEM = ? WHERE ID_CONVERSA = ?
-        """, (datetime.now(), conversa_id))
-
+        cur.execute("UPDATE CONVERSAS SET ULTIMA_MENSAGEM = ? WHERE ID_CONVERSA = ?",
+                    (datetime.now(), conversa_id))
         con.commit()
 
-        # Buscar dados do remetente
-        cur.execute("SELECT NOME FROM USUARIOS WHERE ID_USUARIOS = ?", (id_remetente,))
-        remetente = cur.fetchone()
-        nome_remetente = remetente[0] if remetente else 'Usuário'
-
-        # Formatar data
         data_envio = datetime.now().strftime('%d/%m/%Y %H:%M')
 
-        # Emitir mensagem para a sala
         mensagem_data = {
             'id': novo_id,
             'conversa_id': conversa_id,
             'remetente_id': id_remetente,
-            'remetente_nome': nome_remetente,
             'mensagem': mensagem_texto,
             'data': data_envio
         }
@@ -620,9 +517,7 @@ def handle_send_message(data):
 
     except Exception as e:
         con.rollback()
-        print(f'Erro ao enviar mensagem via socket: {e}')
-        import traceback
-        traceback.print_exc()
+        print(f'Erro: {e}')
         emit('error', {'error': str(e)})
     finally:
         cur.close()

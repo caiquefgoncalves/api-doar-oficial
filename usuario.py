@@ -7,6 +7,7 @@ import threading
 import os
 import datetime
 from random import randint
+import random
 
 
 # Criar usuário
@@ -1239,56 +1240,56 @@ def redefinir():
         con.close()
 
 
-
-
 @app.route('/criar_story', methods=['POST'])
 def criar_story():
     token_data = decodificar_token()
 
     if token_data == False:
-        return jsonify({'error': 'Token necessário'}), 401
+        return jsonify({'error': 'Token necessário. Faça login novamente.'}), 401
 
     if token_data['tipo'] != 2:
         return jsonify({'error': 'Apenas ONGs podem criar stories'}), 403
 
     texto = request.form.get('texto', '')
-    arquivos = request.files.getlist('arquivos')
+    arquivo = request.files.get('arquivos')
 
-    if len(arquivos) == 0:
-        return jsonify({'error': 'Nenhum arquivo enviado'}), 400
+    if not texto:
+        return jsonify({'error': 'O texto do story é obrigatório'}), 400
+
+    if not arquivo:
+        return jsonify({'error': 'Selecione uma imagem ou vídeo para o story'}), 400
 
     con = conexao()
     cur = con.cursor()
 
     try:
-
+        # Inserir story
         cur.execute("""
             INSERT INTO STORIES (ID_USUARIOS, TEXTO, DATA_CRIACAO, VISIVEL)
             VALUES (?, ?, ?, ?) RETURNING ID_STORIES
-        """, (token_data['id_usuarios'], texto, datetime.now(), 1))
+        """, (token_data['id_usuarios'], texto, datetime.datetime.now(), 1))
 
         id_story = cur.fetchone()[0]
 
+        # Salvar arquivo
+        extensao = arquivo.filename.split('.')[-1]
+        nome_arquivo = f'{id_story}_{random.randint(1, 99999)}.{extensao}'
 
-        for arquivo in arquivos:
-            extensao = arquivo.filename.split('.')[-1]
-            nome = f'{id_story}_{random.randint(1, 99999)}.{extensao}'
+        pasta = os.path.join(app.config['UPLOAD_FOLDER'], 'Stories')
+        os.makedirs(pasta, exist_ok=True)
 
-            pasta = os.path.join(app.config['UPLOAD_FOLDER'], 'Stories')
-            os.makedirs(pasta, exist_ok=True)
+        caminho = os.path.join(pasta, nome_arquivo)
+        arquivo.save(caminho)
 
-            caminho = os.path.join(pasta, nome)
-            arquivo.save(caminho)
-
-            # Inserir arquivo (sem ID próprio)
-            cur.execute("""
-                INSERT INTO STORIES_ARQUIVOS (ID_STORIES, ARQUIVO)
-                VALUES (?, ?)
-            """, (id_story, nome))
+        # Inserir arquivo
+        cur.execute("""
+            INSERT INTO STORIES_ARQUIVOS (ID_STORIES, ARQUIVO)
+            VALUES (?, ?)
+        """, (id_story, nome_arquivo))
 
         con.commit()
 
-        return jsonify({'message': 'Story criado com sucesso'}), 201
+        return jsonify({'message': 'Story criado com sucesso!', 'story_id': id_story}), 201
 
     except Exception as e:
         con.rollback()
@@ -1297,7 +1298,6 @@ def criar_story():
     finally:
         cur.close()
         con.close()
-
 
 
 @app.route('/feed_stories', methods=['GET'])
@@ -1316,7 +1316,7 @@ def feed_stories():
                 sa.ARQUIVO
             FROM STORIES s
             INNER JOIN USUARIOS u ON u.ID_USUARIOS = s.ID_USUARIOS
-            INNER JOIN STORIES_ARQUIVOS sa ON sa.ID_STORIES = s.ID_STORIES
+            LEFT JOIN STORIES_ARQUIVOS sa ON sa.ID_STORIES = s.ID_STORIES
             WHERE s.DATA_CRIACAO >= DATEADD(-1 DAY TO CURRENT_TIMESTAMP)
                 AND s.VISIVEL = 1
                 AND u.APROVACAO = 1
@@ -1326,31 +1326,34 @@ def feed_stories():
 
         dados = cur.fetchall()
 
-        stories = {}
+        stories_dict = {}
 
         for s in dados:
             id_story = s[0]
-            texto = s[1]
+            texto = s[1] if s[1] else ''
             ong_id = s[3]
             ong_nome = s[4]
-            arquivo = s[5]
+            arquivo = s[5] if len(s) > 5 else None
 
-            if ong_id not in stories:
-                stories[ong_id] = {
+            if ong_id not in stories_dict:
+                stories_dict[ong_id] = {
                     'ong_id': ong_id,
                     'ong_nome': ong_nome,
                     'ong_foto': f'{ong_id}.jpeg',
                     'stories': []
                 }
 
-            stories[ong_id]['stories'].append({
-                'id': id_story,
-                'texto': texto,
-                'arquivo': arquivo,
-                'url': f"/uploads/Stories/{arquivo}"
-            })
+            if arquivo:
+                stories_dict[ong_id]['stories'].append({
+                    'id': id_story,
+                    'texto': texto,
+                    'arquivo': arquivo
+                })
 
-        return jsonify({'stories': list(stories.values())}), 200
+        # Converter dicionário para lista
+        stories_lista = list(stories_dict.values())
+
+        return jsonify({'stories': stories_lista}), 200
 
     except Exception as e:
         print(f"ERRO feed_stories: {e}")
@@ -1358,7 +1361,6 @@ def feed_stories():
     finally:
         cur.close()
         con.close()
-
 
 
 @app.route('/listar_stories', methods=['GET'])
@@ -1379,7 +1381,7 @@ def listar_stories():
                 s.DATA_CRIACAO,
                 s.TEXTO
             FROM STORIES s
-            INNER JOIN STORIES_ARQUIVOS sa ON sa.ID_STORIES = s.ID_STORIES
+            LEFT JOIN STORIES_ARQUIVOS sa ON sa.ID_STORIES = s.ID_STORIES
             WHERE s.ID_USUARIOS = ?
             ORDER BY s.DATA_CRIACAO DESC
         """, (token_data['id_usuarios'],))
@@ -1388,9 +1390,9 @@ def listar_stories():
         for item in cur.fetchall():
             stories.append({
                 'id': item[0],
-                'foto': item[1],
+                'arquivo': item[1],
                 'data': item[2].strftime('%d/%m/%Y %H:%M') if item[2] else '',
-                'texto': item[3]
+                'texto': item[3] if item[3] else ''
             })
 
         return jsonify({'stories': stories}), 200
@@ -1401,7 +1403,6 @@ def listar_stories():
     finally:
         cur.close()
         con.close()
-
 
 
 @app.route('/deletar_story/<int:id_story>', methods=['DELETE'])
@@ -1415,7 +1416,7 @@ def deletar_story(id_story):
     cur = con.cursor()
 
     try:
-
+        # Verificar se o story pertence ao usuário
         cur.execute("""
             SELECT ID_USUARIOS FROM STORIES WHERE ID_STORIES = ?
         """, (id_story,))
@@ -1425,20 +1426,21 @@ def deletar_story(id_story):
             return jsonify({'error': 'Story não encontrado'}), 404
 
         if story[0] != token_data['id_usuarios'] and token_data['tipo'] != 0:
-            return jsonify({'error': 'Sem permissão'}), 403
+            return jsonify({'error': 'Sem permissão para deletar este story'}), 403
 
-
+        # Buscar arquivos do story
         cur.execute("SELECT ARQUIVO FROM STORIES_ARQUIVOS WHERE ID_STORIES = ?", (id_story,))
         arquivos = cur.fetchall()
 
-
+        # Deletar arquivos físicos
         pasta = os.path.join(app.config['UPLOAD_FOLDER'], 'Stories')
         for arquivo in arquivos:
-            caminho = os.path.join(pasta, arquivo[0])
-            if os.path.exists(caminho):
-                os.remove(caminho)
+            if arquivo[0]:
+                caminho = os.path.join(pasta, arquivo[0])
+                if os.path.exists(caminho):
+                    os.remove(caminho)
 
-
+        # Deletar registros do banco
         cur.execute("DELETE FROM STORIES_ARQUIVOS WHERE ID_STORIES = ?", (id_story,))
         cur.execute("DELETE FROM STORIES WHERE ID_STORIES = ?", (id_story,))
         con.commit()
@@ -1452,4 +1454,3 @@ def deletar_story(id_story):
     finally:
         cur.close()
         con.close()
-
