@@ -217,13 +217,22 @@ from flask import current_app
 import jwt
 
 
-def decodificar_token():
-    try:
-        token = request.cookies.get("acess_token")
 
+
+def decodificar_token(token_recebido=None):
+    try:
+        # Se um token foi passado como argumento, use ele
+        token = token_recebido
+
+        # Se não, tenta pegar do cookie
+        if not token:
+            token = request.cookies.get("acess_token")
+
+        # Se não, tenta pegar da URL
         if not token:
             token = request.args.get('token')
 
+        # Se não, tenta pegar do header Authorization
         if not token:
             auth_header = request.headers.get('Authorization')
             if auth_header and auth_header.startswith('Bearer '):
