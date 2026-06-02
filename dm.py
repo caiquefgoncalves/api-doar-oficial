@@ -1,4 +1,4 @@
-# dm.py - Versão simplificada com status online/offline
+
 from flask import jsonify, request
 from main import app, socketio
 from db import conexao
@@ -6,8 +6,8 @@ from funcao import decodificar_token
 from datetime import datetime
 from flask_socketio import emit, join_room, leave_room
 
-# Dicionário para armazenar usuários online
-usuarios_online = set()  # Apenas IDs dos usuários online
+
+usuarios_online = set()
 
 
 @app.route('/dm/iniciar_conversa/<int:id_ong>', methods=['POST'])

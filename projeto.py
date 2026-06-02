@@ -642,3 +642,177 @@ def verificar_voluntario_projeto(id_projeto):
     finally:
         cur.close()
         con.close()
+
+
+@app.route('/gerar_qr_doacao/<int:id_projeto>', methods=['POST'])
+def gerar_qr_doacao(id_projeto):
+    """Apenas gera o QR Code sem registrar a doação no banco"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 1:
+        return jsonify({'error': 'Apenas doadores podem gerar QR Code'}), 403
+
+    valor = request.json.get('valor')
+
+    if not valor or float(valor) <= 0:
+        return jsonify({'error': 'Digite um valor válido'}), 400
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        # Buscar informações do projeto e ONG
+        cur.execute("""
+            SELECT p.ID_PROJETOS, p.ID_USUARIOS, p.TITULO, u.NOME, u.LOCALIZACAO, u.CHAVE_PIX
+            FROM PROJETOS p
+            INNER JOIN USUARIOS u ON p.ID_USUARIOS = u.ID_USUARIOS
+            WHERE p.ID_PROJETOS = ? AND p.STATUS = 'Ativo'
+        """, (id_projeto,))
+
+        projeto = cur.fetchone()
+
+        if not projeto:
+            return jsonify({'error': 'Projeto não encontrado'}), 404
+
+        id_ong = projeto[1]
+        nome_projeto = projeto[2]
+        nome_ong = projeto[3]
+        cidade_ong = projeto[4] if projeto[4] else ''
+        chave_pix = projeto[5]
+
+        if not chave_pix or chave_pix.strip() == '':
+            return jsonify({'error': 'Esta ONG não possui chave PIX cadastrada'}), 400
+
+        # Gerar ID temporário para o QR Code (usando timestamp)
+        id_temp = int(datetime.now().timestamp() * 1000)
+
+        # Gerar QR Code PIX
+        resultado_qr = gerar_qr_pix(
+            chave_pix=chave_pix,
+            nome=nome_ong,
+            cidade=cidade_ong,
+            id_ong=str(id_temp),
+            pasta_base=app.config['UPLOAD_FOLDER'],
+            valor=str(float(valor)),
+            projeto=True
+        )
+
+        nome_qr = resultado_qr[0]
+        chave_pix_formatada = resultado_qr[1]
+
+        # Armazenar temporariamente os dados da doação em sessão ou retornar um token
+        # Vamos retornar os dados necessários para o frontend
+
+        return jsonify({
+            'message': 'QR Code gerado com sucesso!',
+            'pix': nome_qr,
+            'chave_pix': chave_pix_formatada,
+            'valor': valor,
+            'id_projeto': id_projeto,
+            'id_ong': id_ong,
+            'nome_projeto': nome_projeto,
+            'nome_ong': nome_ong
+        }), 200
+
+    except Exception as e:
+        print(f"ERRO gerar_qr_doacao: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+@app.route('/confirmar_doacao', methods=['POST'])
+def confirmar_doacao():
+    """Confirma a doação após o pagamento"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 1:
+        return jsonify({'error': 'Apenas doadores podem confirmar doação'}), 403
+
+    data = request.get_json()
+    id_projeto = data.get('id_projeto')
+    valor = data.get('valor')
+    id_ong = data.get('id_ong')
+    nome_projeto = data.get('nome_projeto')
+    nome_ong = data.get('nome_ong')
+
+    if not id_projeto or not valor:
+        return jsonify({'error': 'Dados incompletos'}), 400
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        id_doador = token_data['id_usuarios']
+        data_doacao = datetime.now()
+
+        # Buscar informações do doador
+        cur.execute("SELECT NOME, EMAIL FROM USUARIOS WHERE ID_USUARIOS = ?", (id_doador,))
+        doador = cur.fetchone()
+
+        if not doador:
+            return jsonify({'error': 'Doador não encontrado'}), 404
+
+        nome_doador = doador[0]
+        email_doador = doador[1]
+
+        # Buscar informações da ONG
+        cur.execute("""
+            SELECT EMAIL, MENSAGEM_AGRADECIMENTO FROM USUARIOS WHERE ID_USUARIOS = ?
+        """, (id_ong,))
+        ong = cur.fetchone()
+
+        if not ong:
+            return jsonify({'error': 'ONG não encontrada'}), 404
+
+        email_ong = ong[0]
+        mensagem_agradecimento = ong[1] if ong[
+            1] else "Agradecemos imensamente por sua contribuição! Sua doação faz a diferença e nos ajuda a transformar vidas."
+
+        # Registrar doação no banco
+        cur.execute("""
+            INSERT INTO DOACOES (ID_PROJETOS, ID_USUARIOS, VALOR, DATA_DOACAO)
+            VALUES (?, ?, ?, ?) RETURNING ID_DOACOES
+        """, (id_projeto, id_doador, float(valor), data_doacao))
+
+        id_doacao = cur.fetchone()[0]
+        con.commit()
+
+        # Formatar valor para exibição
+        valor_formatado = f"{float(valor):.2f}".replace('.', ',')
+        data_formatada = data_doacao.strftime('%d/%m/%Y às %H:%M')
+
+        # Envia e-mail para o doador
+        if email_doador:
+            assunto_doador = f"Obrigado por sua doação para {nome_ong}!"
+            html_doador = render_template('email_doador_agradecimento.html',
+                                          nome_doador=nome_doador,
+                                          valor=valor_formatado,
+                                          nome_projeto=nome_projeto,
+                                          nome_ong=nome_ong,
+                                          mensagem_agradecimento=mensagem_agradecimento)
+            threading.Thread(target=enviando_email, args=(email_doador, assunto_doador, html_doador)).start()
+
+        # Envia e-mail para a ONG
+        if email_ong:
+            assunto_ong = f"Nova doação recebida - {nome_doador} doou para {nome_projeto}"
+            html_ong = render_template('email_ong_notificacao.html',
+                                       nome_ong=nome_ong,
+                                       valor=valor_formatado,
+                                       nome_doador=nome_doador,
+                                       nome_projeto=nome_projeto,
+                                       data_doacao=data_formatada)
+            threading.Thread(target=enviando_email, args=(email_ong, assunto_ong, html_ong)).start()
+
+        return jsonify({'message': 'Doação confirmada com sucesso!'}), 200
+
+    except Exception as e:
+        con.rollback()
+        print(f"ERRO confirmar_doacao: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
