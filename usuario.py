@@ -581,7 +581,7 @@ def login():
                 cur.execute("UPDATE USUARIOS SET TENTATIVA = 0 WHERE ID_USUARIOS = ?", (id_usuarios,))
                 con.commit()
 
-            token = gerar_token(tipo, id_usuarios, 10)
+            token = gerar_token(tipo, id_usuarios, 1440)
             resp = make_response(jsonify({
             'message': f'Bem-vindo {nome}!',
             'nome': nome,
