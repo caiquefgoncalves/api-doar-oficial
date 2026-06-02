@@ -232,7 +232,7 @@ def relatorio_doadores():
     cur = con.cursor()
 
     try:
-        # Lista de doadores em ordem crescente por ID
+        # Lista de doadores em ordem crescent por ID
         cur.execute("""
             SELECT ID_USUARIOS, NOME, CPF_CNPJ, EMAIL
             FROM USUARIOS
@@ -246,28 +246,36 @@ def relatorio_doadores():
 
         total_doadores = len(usuarios)
 
-        cur.execute("SELECT COALESCE(SUM(VALOR), 0), COUNT(*) FROM DOACOES")
-        total_valor, total_doacoes = cur.fetchone()
-
-        # Top 5 maiores doadores (por valor)
+        # CORREÇÃO: Usar COALESCE com CAST para evitar erro de SQLDA no Firebird
         cur.execute("""
-            SELECT U.NOME, SUM(D.VALOR) as total
+            SELECT 
+                CAST(COALESCE(SUM(VALOR), 0) AS DOUBLE PRECISION) as TOTAL_VALOR, 
+                COUNT(*) as TOTAL_DOACOES 
+            FROM DOACOES
+        """)
+        resultado = cur.fetchone()
+
+        # Tratar possíveis valores NULL
+        total_valor = float(resultado[0]) if resultado and resultado[0] is not None else 0
+        total_doacoes = int(resultado[1]) if resultado and resultado[1] is not None else 0
+
+        # Top 5 maiores doadores (por valor) - usando ROWS no Firebird com CAST corrigido
+        cur.execute("""
+            SELECT FIRST 5 U.NOME, CAST(COALESCE(SUM(D.VALOR), 0) AS DOUBLE PRECISION) as total
             FROM DOACOES D
             JOIN USUARIOS U ON U.ID_USUARIOS = D.ID_USUARIOS
             GROUP BY U.NOME
             ORDER BY total DESC
-            ROWS 5
         """)
         top_doadores = cur.fetchall()
 
         # Top 5 maiores engajadores (por curtidas)
         cur.execute("""
-            SELECT U.NOME, COUNT(C.ID_CURTIDAS) as total
+            SELECT FIRST 5 U.NOME, COUNT(C.ID_CURTIDAS) as total
             FROM CURTIDAS C
             JOIN USUARIOS U ON U.ID_USUARIOS = C.ID_USUARIOS_DOADOR
             GROUP BY U.NOME
             ORDER BY total DESC
-            ROWS 5
         """)
         top_curtidas = cur.fetchall()
 
@@ -281,22 +289,30 @@ def relatorio_doadores():
 
         pdf.ln(5)
 
+        # Formatar valores
+        valor_formatado = f"R$ {total_valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
         resumo_3_colunas(pdf, [
             ("Total de doadores", total_doadores),
             ("Total de doações", total_doacoes),
-            ("Valor arrecadado", f"R$ {total_valor:,.2f}".replace(",", ".").replace(".", ",", 1))
+            ("Valor arrecadado", valor_formatado)
         ])
 
         # Só mostra o ranking se houver doadores
-        if top_doadores:
-            ranking_lista(pdf, "MAIORES DOADORES", top_doadores, tipo="moeda")
+        if top_doadores and len(top_doadores) > 0:
+            # Converter para lista de tuplas (nome, valor)
+            top_doadores_lista = [(row[0], float(row[1])) for row in top_doadores if row[1] > 0]
+            if top_doadores_lista:
+                ranking_lista(pdf, "MAIORES DOADORES", top_doadores_lista, tipo="moeda")
         else:
             pdf.set_font("Arial", "I", 10)
             pdf.cell(0, 6, "Nenhuma doação registrada", ln=True)
             pdf.ln(3)
 
-        if top_curtidas:
-            ranking_lista(pdf, "MAIORES ENGAJADORES", top_curtidas, tipo="numero")
+        if top_curtidas and len(top_curtidas) > 0:
+            top_curtidas_lista = [(row[0], int(row[1])) for row in top_curtidas if row[1] > 0]
+            if top_curtidas_lista:
+                ranking_lista(pdf, "MAIORES ENGAJADORES", top_curtidas_lista, tipo="numero")
         else:
             pdf.set_font("Arial", "I", 10)
             pdf.cell(0, 6, "Nenhum engajamento registrado", ln=True)
@@ -311,11 +327,15 @@ def relatorio_doadores():
         pdf.ln(3)
 
         for u in usuarios:
-            id_usuario, nome, cpf, email = u
+            # Garantir que temos 4 campos
+            id_usuario = u[0] if u[0] is not None else 0
+            nome = u[1] if u[1] is not None else "Não informado"
+            cpf = u[2] if u[2] is not None else ""
+            email = u[3] if u[3] is not None else "Não informado"
 
             pdf.set_font("Arial", "B", 11)
             pdf.set_text_color(*azul)
-            pdf.cell(0, 6, nome, ln=True)
+            pdf.cell(0, 6, str(nome), ln=True)
 
             pdf.set_font("Arial", "", 10)
             pdf.set_text_color(0, 0, 0)
@@ -323,7 +343,7 @@ def relatorio_doadores():
             pdf.cell(0, 5, f"Email: {email}", ln=True)
 
             # Formatar CPF com máscara
-            cpf_formatado = formatar_cpf(cpf) if cpf else "Não informado"
+            cpf_formatado = formatar_cpf(cpf) if cpf and cpf != "" else "Não informado"
             pdf.cell(0, 5, f"CPF: {cpf_formatado}", ln=True)
 
             pdf.ln(5)
@@ -345,13 +365,13 @@ def relatorio_doadores():
 
     except Exception as e:
         print(f"ERRO relatorio_doadores: {e}")
-        con.rollback()
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
     finally:
         cur.close()
         con.close()
-
 
 
 
@@ -362,7 +382,7 @@ def relatorio_ongs():
     cur = con.cursor()
 
     try:
-        # Buscar TODAS as ONGs para a lista completa
+
         cur.execute("""
             SELECT ID_USUARIOS, NOME, CPF_CNPJ, EMAIL
             FROM USUARIOS
@@ -376,47 +396,49 @@ def relatorio_ongs():
 
         total_ongs = len(ongs)
 
-        # Total arrecadado (todas as ONGs)
-        cur.execute("SELECT COALESCE(SUM(VALOR), 0), COUNT(*) FROM DOACOES")
-        retorno = cur.fetchone()
-        total_valor = retorno[0]
+        # Total arrecadado (todas as ONGs) - Corrigido com CAST para evitar erro de SQLDA
+        cur.execute("""
+            SELECT 
+                CAST(COALESCE(SUM(VALOR), 0) AS DOUBLE PRECISION) as TOTAL_VALOR, 
+                COUNT(*) as TOTAL_DOACOES 
+            FROM DOACOES
+        """)
+        resultado = cur.fetchone()
+        total_valor = float(resultado[0]) if resultado and resultado[0] is not None else 0
 
         # Total de voluntariados
-        cur.execute("""
-            SELECT COUNT(V.ID_VOLUNTARIADO)
-            FROM VOLUNTARIADO V
-        """)
-        total_voluntarios = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(ID_VOLUNTARIADO) FROM VOLUNTARIADO")
+        total_voluntarios = cur.fetchone()[0] or 0
 
-        # Ranking ONGs por arrecadação (APENAS com valor > 0)
+        # Ranking ONGs por arrecadação (APENAS com valor > 0) - Corrigido com CAST
         cur.execute("""
-            SELECT U.NOME, COALESCE(SUM(D.VALOR), 0) as total
+            SELECT FIRST 5 U.NOME, CAST(COALESCE(SUM(D.VALOR), 0) AS DOUBLE PRECISION) as total
             FROM USUARIOS U
             LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
             LEFT JOIN DOACOES D ON D.ID_PROJETOS = P.ID_PROJETOS
             WHERE U.TIPO = 2
             GROUP BY U.NOME
-            HAVING COALESCE(SUM(D.VALOR), 0) > 0
+            HAVING CAST(COALESCE(SUM(D.VALOR), 0) AS DOUBLE PRECISION) > 0
             ORDER BY total DESC
-            ROWS 5
         """)
         ongs_doacoes = cur.fetchall()
 
         # Ranking ONGs por voluntariados (APENAS com count > 0)
         cur.execute("""
-            SELECT U.NOME, COUNT(V.ID_VOLUNTARIADO) as total
+            SELECT FIRST 5 
+                U.NOME,
+                COUNT(DISTINCT V.ID_VOLUNTARIADO) as QTD_VOLUNTARIADOS
             FROM USUARIOS U
             LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
             LEFT JOIN VOLUNTARIADO V ON V.ID_PROJETOS = P.ID_PROJETOS
             WHERE U.TIPO = 2
             GROUP BY U.NOME
-            HAVING COUNT(V.ID_VOLUNTARIADO) > 0
-            ORDER BY total DESC
-            ROWS 5
+            HAVING COUNT(DISTINCT V.ID_VOLUNTARIADO) > 0
+            ORDER BY QTD_VOLUNTARIADOS DESC
         """)
         ongs_voluntariado = cur.fetchall()
 
-        # Lista detalhada de TODAS as ONGs (incluindo as com 0)
+        # Lista completa de ONGs com estatísticas - Corrigido com CAST
         cur.execute("""
             SELECT 
                 U.ID_USUARIOS,
@@ -424,7 +446,7 @@ def relatorio_ongs():
                 U.CPF_CNPJ,
                 U.EMAIL,
                 COUNT(DISTINCT D.ID_DOACOES) as QTD_DOACOES,
-                COALESCE(SUM(D.VALOR), 0) as TOTAL_DOACOES,
+                CAST(COALESCE(SUM(D.VALOR), 0) AS DOUBLE PRECISION) as TOTAL_DOACOES,
                 COUNT(DISTINCT V.ID_VOLUNTARIADO) as QTD_VOLUNTARIADOS
             FROM USUARIOS U
             LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
@@ -446,23 +468,30 @@ def relatorio_ongs():
 
         pdf.ln(5)
 
+        # Formatar valor
+        valor_formatado = f"R$ {total_valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
         resumo_3_colunas(pdf, [
             ("Total de ONGs", total_ongs),
-            ("Arrecadado", f"R$ {total_valor:,.2f}".replace(",", ".").replace(".", ",", 1)),
+            ("Arrecadado", valor_formatado),
             ("Voluntários", total_voluntarios)
         ])
 
         # Só mostra o ranking se houver ONGs com doações
-        if ongs_doacoes:
-            ranking_lista(pdf, "ONGS COM MAIOR ARRECADAÇÃO", ongs_doacoes, tipo="moeda")
+        if ongs_doacoes and len(ongs_doacoes) > 0:
+            ongs_doacoes_lista = [(row[0], float(row[1])) for row in ongs_doacoes if row[1] > 0]
+            if ongs_doacoes_lista:
+                ranking_lista(pdf, "ONGS COM MAIOR ARRECADAÇÃO", ongs_doacoes_lista, tipo="moeda")
         else:
             pdf.set_font("Arial", "I", 10)
             pdf.cell(0, 6, "Nenhuma ONG com arrecadação registrada", ln=True)
             pdf.ln(3)
 
         # Só mostra o ranking se houver ONGs com voluntariados
-        if ongs_voluntariado:
-            ranking_lista(pdf, "ONGS COM MAIS PEDIDOS DE VOLUNTARIADO", ongs_voluntariado, tipo="voluntariado")
+        if ongs_voluntariado and len(ongs_voluntariado) > 0:
+            ongs_voluntariado_lista = [(row[0], int(row[1])) for row in ongs_voluntariado if row[1] > 0]
+            if ongs_voluntariado_lista:
+                ranking_lista(pdf, "ONGS COM MAIS PEDIDOS DE VOLUNTARIADO", ongs_voluntariado_lista, tipo="voluntariado")
         else:
             pdf.set_font("Arial", "I", 10)
             pdf.cell(0, 6, "Nenhuma ONG com voluntariado registrado", ln=True)
@@ -477,11 +506,18 @@ def relatorio_ongs():
         pdf.ln(3)
 
         for ong in lista_ongs:
-            id_ong, nome, cnpj, email, qtd_doacoes, total_ong, qtd_voluntarios = ong
+            # Garantir que temos todos os campos
+            id_ong = ong[0] if ong[0] is not None else 0
+            nome = ong[1] if ong[1] is not None else "Não informado"
+            cnpj = ong[2] if ong[2] is not None else ""
+            email = ong[3] if ong[3] is not None else "Não informado"
+            qtd_doacoes = int(ong[4]) if ong[4] is not None else 0
+            total_ong = float(ong[5]) if ong[5] is not None else 0
+            qtd_voluntarios = int(ong[6]) if ong[6] is not None else 0
 
             pdf.set_font("Arial", "B", 11)
             pdf.set_text_color(*azul)
-            pdf.cell(0, 6, nome, ln=True)
+            pdf.cell(0, 6, str(nome), ln=True)
 
             pdf.set_font("Arial", "", 10)
             pdf.set_text_color(0, 0, 0)
@@ -489,18 +525,15 @@ def relatorio_ongs():
             pdf.cell(0, 5, f"Email: {email}", ln=True)
 
             # Formatar CNPJ com máscara ##.###.###/####-##
-            cnpj_formatado = formatar_cnpj(cnpj) if cnpj else "Não informado"
+            cnpj_formatado = formatar_cnpj(cnpj) if cnpj and cnpj != "" else "Não informado"
             pdf.cell(0, 5, f"CNPJ: {cnpj_formatado}", ln=True)
 
             pdf.set_text_color(0, 0, 0)
             pdf.cell(0, 5, f"Doações: {qtd_doacoes}", ln=True)
             pdf.cell(0, 5, f"Voluntários: {qtd_voluntarios}", ln=True)
 
-            pdf.cell(
-                0, 5,
-                f"Total arrecadado: R$ {total_ong:,.2f}".replace(",", ".").replace(".", ",", 1),
-                ln=True
-            )
+            total_ong_formatado = f"R$ {total_ong:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            pdf.cell(0, 5, f"Total arrecadado: {total_ong_formatado}", ln=True)
 
             pdf.ln(5)
 
@@ -521,7 +554,8 @@ def relatorio_ongs():
 
     except Exception as e:
         print(f"ERRO relatorio_ongs: {e}")
-        con.rollback()
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
     finally:
