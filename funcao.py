@@ -226,7 +226,12 @@ def decodificar_token(token_recebido=None):
 
         # Se não, tenta pegar do cookie
         if not token:
-            token = request.cookies.get("acess_token")
+            token = (
+                    request.cookies.get('acess_token') or
+                    request.form.get('token') or
+                    request.args.get('token') or
+                    request.headers.get('Authorization')
+            )
 
         # Se não, tenta pegar da URL
         if not token:
